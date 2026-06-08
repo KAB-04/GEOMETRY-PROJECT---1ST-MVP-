@@ -2,24 +2,34 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 
-from Math_Engine.Euclidean_1 import calculate_distance
-from .serializers import DistanceSerializer
+from .SolveSerializer import SolveSerializer
+from .engine_loader import load_all_functions
+
+FUNCTIONS = load_all_functions()
 
 
 @api_view(['POST'])
-def distance_api(request):
-    serializer = DistanceSerializer(data=request.data)
+def solve_api(request):
+    serializer = SolveSerializer(data=request.data)
 
     if serializer.is_valid():
-        data = serializer.validated_data
+        operation = serializer.validated_data['operation']
+        data = serializer.validated_data['data']
 
-        result = calculate_distance(
-            data['x1'],
-            data['y1'],
-            data['x2'],
-            data['y2']
-        )
+        if operation not in FUNCTIONS:
+            return Response(
+                {"error": f"{operation} not found"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        return Response({"distance": result}, status=status.HTTP_200_OK)
+        try:
+            result = FUNCTIONS[operation](**data)
+            return Response({"result": result})
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
