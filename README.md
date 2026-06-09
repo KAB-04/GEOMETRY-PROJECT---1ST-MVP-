@@ -7,6 +7,9 @@ We're building a chatbot that:
 4. Visualises the results(2D First, minimal-3D).
 
 # ARCHITECTURE.
+
+![Architecture Diagram](./assets/architecture.png)
+
 USER INPUT PROBLEM ----> GEMINI PARSES PROBLEM ----> STRUCTURED JSON ----> MATH ENGINE PROCESS ----> OUTPUT SOLUTIONS AND FRONTEND VISUALISE.
     
 ### TECH STACK.
