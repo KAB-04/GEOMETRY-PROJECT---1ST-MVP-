@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import pkgutil
 from . import Math_Engine
 
@@ -12,11 +13,11 @@ def load_all_functions():
     for loader, module_name, is_pkg in pkgutil.iter_modules(package.__path__):
         module = importlib.import_module(f"{package.__name__}.{module_name}")
 
-        for attr in dir(module):
-            func = getattr(module, attr)
+        for attr, value in vars(module).items():
+            if attr.startswith("_"):
+                continue
 
-            if callable(func) and not attr.startswith("_"):
-                # store function
-                functions[attr] = func
+            if inspect.isfunction(value):
+                functions[attr] = value
 
     return functions

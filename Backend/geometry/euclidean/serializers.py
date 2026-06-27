@@ -1,11 +1,24 @@
 from rest_framework import serializers
 
-class DistanceSerializer(serializers.Serializer):
-    x1 = serializers.FloatField()
-    y1 = serializers.FloatField()
-    x2 = serializers.FloatField()
-    y2 = serializers.FloatField()
 
+class SolveSerializer(serializers.Serializer):
 
-class CircleAreaSerializer(serializers.Serializer):
-    radius = serializers.FloatField()
+    question = serializers.CharField(required=False)
+
+    operation = serializers.CharField(required=False)
+
+    data = serializers.DictField(required=False)
+
+    def validate(self, attrs):
+
+        # AI mode
+        if "question" in attrs:
+            return attrs
+
+        # Direct solver mode
+        if "operation" in attrs and "data" in attrs:
+            return attrs
+
+        raise serializers.ValidationError(
+            "Provide either 'question' or ('operation' and 'data')."
+        )

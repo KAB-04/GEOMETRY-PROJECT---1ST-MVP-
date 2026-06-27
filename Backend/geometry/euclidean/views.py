@@ -3,9 +3,14 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .SolveSerializer import SolveSerializer
-from .engine_loader import load_all_functions
 
-FUNCTIONS = load_all_functions()
+from .solver.Solver import Solver
+from .solver.exceptions import (
+    OperationNotFoundError,
+    SolverError,
+)
+
+solver = Solver()
 
 
 @api_view(['POST'])
@@ -13,23 +18,31 @@ def solve_api(request):
     serializer = SolveSerializer(data=request.data)
 
     if serializer.is_valid():
+
         operation = serializer.validated_data['operation']
         data = serializer.validated_data['data']
 
-        if operation not in FUNCTIONS:
+        try:
+            result = solver.solve(operation, data)
+
             return Response(
-                {"error": f"{operation} not found"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"result": result},
+                status=status.HTTP_200_OK
             )
 
-        try:
-            result = FUNCTIONS[operation](**data)
-            return Response({"result": result})
+        except OperationNotFoundError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        except Exception as e:
+        except SolverError as e:
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    return Response(
+        serializer.errors,
+        status=status.HTTP_400_BAD_REQUEST
+    )
