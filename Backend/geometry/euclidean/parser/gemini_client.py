@@ -16,11 +16,12 @@ class GeminiClient:
             raise ValueError("GEMINI_API_KEY not found.")
 
         self.client = genai.Client(api_key=api_key)
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
     def generate(self, prompt):
 
         response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=self.model,
             contents=prompt,
         )
 

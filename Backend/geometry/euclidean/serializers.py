@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 class SolveSerializer(serializers.Serializer):
 
-    question = serializers.CharField(required=False)
+    question = serializers.CharField(required=False, allow_blank=False, trim_whitespace=True)
 
     operation = serializers.CharField(required=False)
 
@@ -13,6 +13,10 @@ class SolveSerializer(serializers.Serializer):
 
         # AI mode
         if "question" in attrs:
+            if len(attrs) != 1:
+                raise serializers.ValidationError(
+                    "Provide either 'question' or ('operation' and 'data'), not both."
+                )
             return attrs
 
         # Direct solver mode

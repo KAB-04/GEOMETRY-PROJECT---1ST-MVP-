@@ -1,5 +1,8 @@
+import inspect
+
 from .registry import get_operation
 from .exceptions import (
+    InvalidParametersError,
     OperationNotFoundError,
     SolverError,
 )
@@ -20,8 +23,15 @@ class Solver:
             )
 
         try:
-            result = function(**data)
-            return result
+            inspect.signature(function).bind(**data)
+        except TypeError as exc:
+            raise InvalidParametersError(str(exc)) from exc
 
-        except Exception as e:
-            raise SolverError(str(e))
+        try:
+            result = function(**data)
+        except (TypeError, ValueError, ZeroDivisionError) as exc:
+            raise InvalidParametersError(str(exc)) from exc
+        except Exception as exc:
+            raise SolverError("The geometry operation failed.") from exc
+
+        return result

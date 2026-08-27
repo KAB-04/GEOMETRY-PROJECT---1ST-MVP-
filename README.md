@@ -8,7 +8,7 @@ We're building a chatbot that:
 
 # ARCHITECTURE.
 
-![Architecture Diagram](./assets/architecture.png)
+![Architecture Diagram](./assets/Geo.png)
 
 USER INPUT PROBLEM ----> GEMINI PARSES PROBLEM ----> STRUCTURED JSON ----> MATH ENGINE PROCESS ----> OUTPUT SOLUTIONS AND FRONTEND VISUALISE.
     

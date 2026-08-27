@@ -907,6 +907,11 @@ def thales_theorem(A: Point, B: Point, C: Point) -> bool:
     return Angle(A, C, B).is_right()
 
 
+def distance(x1: float, y1: float, x2: float, y2: float) -> float:
+    """Distance between two points in the Cartesian plane."""
+    return math.hypot(x2 - x1, y2 - y1)
+
+
 def pythagoras(a: float, b: float) -> float:
     """Hypotenuse c = sqrt(a^2 + b^2) for a right triangle with legs a and b."""
     return math.hypot(a, b)
