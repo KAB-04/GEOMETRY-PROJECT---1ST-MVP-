@@ -1,3 +1,1 @@
-export function GeometryVisualizer() {
-  return null;
-}
+export { GeometryVisualizer } from "../visualization/GeometryVisualizer";

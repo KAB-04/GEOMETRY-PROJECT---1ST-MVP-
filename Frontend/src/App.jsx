@@ -56,7 +56,7 @@ function App() {
             )}
 
             <ProblemInput
-              value={solver.question}
+              value={solver.inputQuestion}
               onChange={solver.setQuestion}
               onSubmit={() => solver.solveProblem()}
               loading={solver.loading}

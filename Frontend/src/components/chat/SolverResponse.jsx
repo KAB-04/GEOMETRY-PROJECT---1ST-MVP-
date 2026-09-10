@@ -1,11 +1,30 @@
-function formatResult(result) {
-  if (result === null || result === undefined) return "No result returned";
-  if (typeof result === "object") return JSON.stringify(result, null, 2);
-  return String(result);
-}
+import { GeometryVisualizer } from "./GeometryVisualizer";
+import { MathBlock, MathInline } from "./MathText";
+import { formatResult } from "../../utils/formatNumber";
 
 function operationLabel(operation) {
   return operation.replaceAll("_", " ");
+}
+
+function Explanation({ explanation }) {
+  if (!explanation || typeof explanation !== "object") {
+    return <p>{explanation}</p>;
+  }
+
+  return (
+    <div className="solution-steps">
+      {explanation.concept && <p>{explanation.concept}</p>}
+      {explanation.formula && <MathBlock value={explanation.formula} />}
+      {Array.isArray(explanation.steps) && explanation.steps.length > 0 && (
+        <ol>
+          {explanation.steps.map((step, index) => (
+            <li key={`${step}-${index}`}><MathBlock value={step} /></li>
+          ))}
+        </ol>
+      )}
+      {explanation.conclusion && <p>{explanation.conclusion}</p>}
+    </div>
+  );
 }
 
 export function SolverResponse({ response }) {
@@ -17,7 +36,7 @@ export function SolverResponse({ response }) {
           <p className="eyebrow">Geometry solution</p>
           <h2>Your answer</h2>
         </div>
-        <span className="operation-chip">{operationLabel(response.operation)}</span>
+        <span className="operation-chip">{response.operationLabel || operationLabel(response.operation)}</span>
       </div>
 
       <div className="answer-block">
@@ -27,17 +46,11 @@ export function SolverResponse({ response }) {
 
       <div className="explanation-block">
         <span className="answer-label">Explanation</span>
-        <p>{response.explanation}</p>
+        <Explanation explanation={response.explanation} />
       </div>
 
       {response.visualization && (
-        <div className="visualization-placeholder">
-          <span className="placeholder-icon" aria-hidden="true">◇</span>
-          <div>
-            <strong>Geometry view ready</strong>
-            <p>Interactive visualization will appear in Phase 2.</p>
-          </div>
-        </div>
+        <GeometryVisualizer visualization={response.visualization} />
       )}
     </article>
   );

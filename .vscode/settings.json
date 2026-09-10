@@ -1,0 +1,3 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}\\Backend\\virtual\\Scripts\\python.exe"
+}

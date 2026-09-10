@@ -176,6 +176,8 @@ def theorem1_1_pi_as_limit(n_sides: int = 1_000_000) -> float:
 
 def circle_circumference(rho: float) -> float:
     """Corollary 1.1.  C = 2πρ."""
+    if rho <= 0:
+        raise ValueError("Circle radius must be positive.")
     return 2 * PI * rho
 
 
@@ -183,7 +185,55 @@ def circle_circumference(rho: float) -> float:
 
 def circle_area(rho: float) -> float:
     """Theorem 1.2.  Area of circle of radius ρ is πρ²."""
+    if rho <= 0:
+        raise ValueError("Circle radius must be positive.")
     return PI * rho**2
+
+
+def circle_circle_intersection(
+    x1: float, y1: float, r1: float, x2: float, y2: float, r2: float
+) -> dict:
+    """Classify and calculate the intersection of two Euclidean circles."""
+    if r1 <= 0 or r2 <= 0:
+        raise ValueError("Circle radii must be positive.")
+
+    tolerance = 1e-9 * max(1.0, abs(x1), abs(y1), abs(x2), abs(y2), r1, r2)
+    dx = x2 - x1
+    dy = y2 - y1
+    center_distance = math.hypot(dx, dy)
+
+    if center_distance == 0.0:
+        relationship = "coincident" if math.isclose(r1, r2, rel_tol=1e-9, abs_tol=1e-12) else "contained"
+        return {
+            "intermediate": {"center_distance": center_distance},
+            "final": {"relationship": relationship, "intersection_count": "infinite" if relationship == "coincident" else 0, "points": []},
+        }
+
+    radius_sum = r1 + r2
+    radius_difference = abs(r1 - r2)
+    if center_distance > radius_sum + tolerance or center_distance < radius_difference - tolerance:
+        relationship = "separate" if center_distance > radius_sum else "contained"
+        points = []
+    else:
+        along = (r1**2 - r2**2 + center_distance**2) / (2 * center_distance)
+        height = math.sqrt(max(0.0, r1**2 - along**2))
+        base_x = x1 + along * dx / center_distance
+        base_y = y1 + along * dy / center_distance
+        perpendicular_x = -dy / center_distance
+        perpendicular_y = dx / center_distance
+        first = (base_x + height * perpendicular_x, base_y + height * perpendicular_y)
+        second = (base_x - height * perpendicular_x, base_y - height * perpendicular_y)
+        if math.isclose(height, 0, abs_tol=tolerance):
+            relationship = "tangent"
+            points = [first]
+        else:
+            relationship = "intersecting"
+            points = [first, second]
+
+    return {
+        "intermediate": {"center_distance": center_distance},
+        "final": {"relationship": relationship, "intersection_count": len(points), "points": [{"x": point[0], "y": point[1]} for point in points]},
+    }
 
 
 # ------ Arc length & sectors (§1.4, §1.6) ------------------------------------

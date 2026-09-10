@@ -914,11 +914,15 @@ def distance(x1: float, y1: float, x2: float, y2: float) -> float:
 
 def pythagoras(a: float, b: float) -> float:
     """Hypotenuse c = sqrt(a^2 + b^2) for a right triangle with legs a and b."""
+    if a <= 0 or b <= 0:
+        raise ValueError("Triangle legs must be positive.")
     return math.hypot(a, b)
 
 
 def pythagoras_verify(a: float, b: float, c: float, tol: float = 1e-9) -> bool:
     """Verifies a^2 + b^2 = c^2 (where c is the hypotenuse)."""
+    if a <= 0 or b <= 0 or c <= 0:
+        raise ValueError("Triangle sides must be positive.")
     return math.isclose(a**2 + b**2, c**2, abs_tol=tol)
 
 
