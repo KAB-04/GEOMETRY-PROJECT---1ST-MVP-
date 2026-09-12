@@ -1,5 +1,7 @@
 import math
 import logging
+import hashlib
+import json
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -26,6 +28,8 @@ from .parser.exceptions import (
 )
 from .parser.exceptions import UnsupportedGeometryOperation
 from .parser.parser_service import ParserService
+from .models import SolvedProblem
+from .topics import get_topics
 
 solver = Solver()
 solution_planner = SolutionPlanner(solver)
@@ -91,8 +95,7 @@ def solve_api(request):
                 result = solver.solve(operation, data)
 
         explanation = build_explanation(operation, data, result, question)
-        return Response(
-            {
+        payload = {
                 "success": True,
                 "question": question,
                 "operation": operation,
@@ -100,7 +103,10 @@ def solve_api(request):
                 "result": result,
                 "explanation": explanation,
                 "visualization": _visualization_for(operation, data, result, question),
-            },
+            }
+        _save_history_item(request, payload, data)
+        return Response(
+            payload,
             status=status.HTTP_200_OK,
         )
     except OperationNotFoundError as exc:
@@ -379,4 +385,121 @@ def _triangle_point_for_angles(angle_a, angle_b, angle_c):
         return 0.5, 1
     side_ac = 6 * math.sin(math.radians(angle_b)) / sine_c
     return side_ac * math.cos(math.radians(angle_a)), side_ac * math.sin(math.radians(angle_a))
+
+
+@api_view(["GET"])
+def topics_api(request):
+    return Response({"success": True, "topics": get_topics()}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "DELETE"])
+def history_api(request):
+    session_key = _ensure_session_key(request)
+    queryset = SolvedProblem.objects.filter(session_key=session_key)
+
+    if request.method == "DELETE":
+        queryset.delete()
+        return Response({"success": True}, status=status.HTTP_200_OK)
+
+    query = request.query_params.get("q", "").strip()
+    if query:
+        queryset = queryset.filter(question__icontains=query)
+    limit = _safe_int(request.query_params.get("limit"), 50)
+    items = [_history_summary(item) for item in queryset[: min(max(limit, 1), 100)]]
+    return Response({"success": True, "items": items}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "DELETE"])
+def history_detail_api(request, pk):
+    session_key = _ensure_session_key(request)
+    try:
+        item = SolvedProblem.objects.get(pk=pk, session_key=session_key)
+    except SolvedProblem.DoesNotExist:
+        return Response(
+            {"success": False, "error": {"code": "HISTORY_ITEM_NOT_FOUND", "message": "That history item could not be found."}},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "DELETE":
+        item.delete()
+        return Response({"success": True}, status=status.HTTP_200_OK)
+
+    return Response({"success": True, "item": _history_detail(item)}, status=status.HTTP_200_OK)
+
+
+def _save_history_item(request, payload, data):
+    if payload.get("success") is not True:
+        return
+    question = payload.get("question") or f"Direct solve: {payload.get('operation', 'geometry operation')}"
+    session_key = _ensure_session_key(request)
+    visualization = payload.get("visualization") or {}
+    response_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "question": question,
+                "operation": payload.get("operation"),
+                "result": payload.get("result"),
+                "visualization": visualization,
+            },
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    geometry_type = _geometry_type_for(payload.get("operation"), visualization, data)
+    SolvedProblem.objects.get_or_create(
+        session_key=session_key,
+        response_hash=response_hash,
+        defaults={
+            "question": question,
+            "geometry_type": geometry_type,
+            "dimension": visualization.get("dimension", ""),
+            "operation": payload.get("operation", ""),
+            "operation_label": payload.get("operation_label", ""),
+            "result": payload.get("result"),
+            "explanation": payload.get("explanation"),
+            "visualization": visualization,
+            "response": {**payload, "question": question},
+        },
+    )
+
+
+def _ensure_session_key(request):
+    if not request.session.session_key:
+        request.session.save()
+    return request.session.session_key or ""
+
+
+def _history_summary(item):
+    return {
+        "id": item.id,
+        "question": item.question,
+        "geometry_type": item.geometry_type,
+        "dimension": item.dimension,
+        "operation": item.operation,
+        "operation_label": item.operation_label,
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
+def _history_detail(item):
+    return {**_history_summary(item), "response": item.response}
+
+
+def _geometry_type_for(operation, visualization, data):
+    objects = visualization.get("objects") if isinstance(visualization, dict) else []
+    if objects:
+        primitive = objects[-1].get("type", "") if isinstance(objects[-1], dict) else ""
+        if primitive in {"cylinder", "cone", "cuboid"}:
+            return primitive
+    if operation:
+        return operation.split("_")[0]
+    return ""
+
+
+def _safe_int(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 

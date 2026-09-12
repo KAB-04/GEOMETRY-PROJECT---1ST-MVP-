@@ -2,6 +2,8 @@
 
 GEOMETRY is a natural-language geometry solving application. It accepts geometry word problems, converts them into structured mathematical intent, solves them through the backend Geometry Math Engine, and visualizes the result in 2D or 3D.
 
+This chatbot is an MVP and testbed for the custom Geometry Math Engine. The long-term project is an adaptive geometry-learning platform that will teach learners from beginner to advanced levels through personalized teaching, interactive geometry, animations, simulations, guided explanations, practice, and adaptive progression.
+
 The MVP focuses on reliable semantic routing: the system must solve the operation the user actually requested, not a simpler related operation. For example, a cylinder volume problem must not be solved as circle area, and a cone height/volume problem must not be reduced to a final Pythagorean triangle answer.
 
 ## Architecture
@@ -19,6 +21,7 @@ User question
 -> visualization adapter
 -> React frontend
 -> Canvas 2D or Three.js 3D visualization
+-> saved History replay when appropriate
 ```
 
 ### Backend Responsibilities
@@ -30,6 +33,8 @@ User question
 - Use the Geometry Math Engine as the authoritative calculation layer.
 - Build student-friendly explanations.
 - Produce visualization payloads for the frontend.
+- Persist successful solves to anonymous session-based History.
+- Expose backend-driven Topics from actual supported engine capabilities.
 
 ### Frontend Responsibilities
 
@@ -37,6 +42,8 @@ User question
 - Display final results and structured explanations.
 - Render 2D diagrams with Canvas.
 - Render 3D geometry with Three.js.
+- Let users browse Topics and prefill example questions.
+- Let users restore History items without re-calling Gemini.
 - Never calculate authoritative mathematical answers.
 
 ## Tech Stack
@@ -72,7 +79,9 @@ User question
 |           |-- Math_Engine/
 |           |-- parser/
 |           |-- solver/
+|           |-- migrations/
 |           |-- explanations.py
+|           |-- topics.py
 |           `-- views.py
 |-- Frontend/
 |   |-- package.json
@@ -141,6 +150,17 @@ Backend health check:
 
 ```text
 http://127.0.0.1:8000/api/health/
+```
+
+Core backend endpoints:
+
+```text
+POST   /api/solve/
+GET    /api/history/
+GET    /api/history/<id>/
+DELETE /api/history/<id>/
+DELETE /api/history/
+GET    /api/topics/
 ```
 
 ## Frontend Setup
@@ -237,6 +257,27 @@ The current MVP supports a growing set of Euclidean and analytical geometry oper
 - cylinder volume and surface-area operations
 - cone height derivation and cone volume planning
 
+## History
+
+History stores successful solved problems for the current anonymous browser session. Each record stores the original question or direct-operation label, operation metadata, result JSON, explanation JSON, and visualization JSON.
+
+Opening a History item restores the saved structured response directly in the frontend. It does not send the old question back through Gemini, which avoids extra AI cost, quota use, and interpretation drift.
+
+Failed provider calls, unsupported operations, invalid geometry, and incomplete requests are not saved.
+
+## Topics
+
+Topics provide a compact map of the chatbot MVP's supported geometry areas. Topic data is served by the backend from centralized metadata and checked against the current operation registry.
+
+Topic statuses:
+
+- `available`: exposed through the chatbot and backed by registered operations
+- `partial`: some operations in the area are available
+- `experimental`: engine modules exist, but the chatbot does not fully expose them yet
+- `coming_later`: not supported in this MVP
+
+Clicking a topic example returns to the solver and places the example question in the input. It does not automatically submit, so the learner can edit it first.
+
 ## Semantic Routing Rule
 
 The solver follows this rule:
@@ -248,3 +289,11 @@ Never silently solve a related easier problem
 ```
 
 Gemini is responsible for interpreting intent. The backend is responsible for validation, planning, mathematical execution, and request-satisfaction checks.
+
+## Current Limitations
+
+- The chatbot is anonymous-session based; there is no production user account system yet.
+- History is local to the current browser session cookie.
+- Gemini availability and quota can affect new natural-language interpretations.
+- Advanced engine areas such as topology, non-Euclidean geometry, computational geometry, and differential geometry are not fully exposed through the MVP chatbot.
+- The system is not a full adaptive learning platform yet; it is the working chatbot foundation for that larger product.

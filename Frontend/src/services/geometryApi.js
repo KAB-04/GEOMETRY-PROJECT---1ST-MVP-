@@ -9,6 +9,33 @@ function getErrorMessage(data, status) {
   return "I couldn't solve that problem. Try rephrasing the question.";
 }
 
+function normalizeSolveResponse(data, fallbackQuestion = "") {
+  return {
+    question: data.question || fallbackQuestion,
+    operation: data.operation || "geometry operation",
+    operationLabel: data.operation_label || data.operationLabel || data.operation || "Geometry operation",
+    result: data.result,
+    explanation: data.explanation || "The Geometry engine returned a result without an explanation.",
+    visualization: data.visualization || null,
+  };
+}
+
+async function requestJson(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
+    credentials: "include",
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || data?.success === false) {
+    throw new Error(getErrorMessage(data, response.status));
+  }
+  return data;
+}
+
 export async function solveGeometryProblem(question) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -16,6 +43,7 @@ export async function solveGeometryProblem(question) {
   try {
     const response = await fetch(`${API_URL}/api/solve/`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question: question.trim() }),
       signal: controller.signal,
@@ -30,14 +58,7 @@ export async function solveGeometryProblem(question) {
       throw new Error("The Geometry server returned an invalid response.");
     }
 
-    return {
-      question: data.question || question,
-      operation: data.operation || "geometry operation",
-      operationLabel: data.operation_label || data.operation || "Geometry operation",
-      result: data.result,
-      explanation: data.explanation || "The Geometry engine returned a result without an explanation.",
-      visualization: data.visualization || null,
-    };
+    return normalizeSolveResponse(data, question);
   } catch (error) {
     if (error.name === "AbortError") {
       throw new Error("The request took too long. Please try again.");
@@ -49,4 +70,31 @@ export async function solveGeometryProblem(question) {
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+export async function getHistory(query = "") {
+  const search = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+  const data = await requestJson(`/api/history/${search}`);
+  return data.items || [];
+}
+
+export async function getHistoryItem(id) {
+  const data = await requestJson(`/api/history/${id}/`);
+  return {
+    ...data.item,
+    response: normalizeSolveResponse(data.item.response, data.item.question),
+  };
+}
+
+export async function deleteHistoryItem(id) {
+  await requestJson(`/api/history/${id}/`, { method: "DELETE" });
+}
+
+export async function clearHistory() {
+  await requestJson("/api/history/", { method: "DELETE" });
+}
+
+export async function getTopics() {
+  const data = await requestJson("/api/topics/");
+  return data.topics || [];
 }

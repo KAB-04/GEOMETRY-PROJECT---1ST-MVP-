@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 import math
 import os
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 
 from .parser.parser_service import ParserService
@@ -166,7 +166,7 @@ class SupportedOperationsTests(SimpleTestCase):
         self.assertNotIn("_fmt", SUPPORTED_OPERATIONS)
 
 
-class SolveApiTests(SimpleTestCase):
+class SolveApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
 
@@ -174,6 +174,64 @@ class SolveApiTests(SimpleTestCase):
         response = self.client.get("/api/health/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"success": True, "status": "ok"})
+
+    def test_topics_api_maps_actual_engine_capabilities(self):
+        response = self.client.get("/api/topics/")
+        self.assertEqual(response.status_code, 200)
+        topics = response.json()["topics"]
+        cylinders = next(topic for topic in topics if topic["id"] == "cylinders")
+        self.assertEqual(cylinders["status"], "available")
+        self.assertEqual(cylinders["dimension"], "3d")
+        self.assertIn("cylinder_volume", [item["operation"] for item in cylinders["supported_operations"]])
+        advanced = next(topic for topic in topics if topic["id"] == "advanced-experimental")
+        self.assertEqual(advanced["status"], "experimental")
+
+    def test_successful_solution_is_saved_and_replayable_from_history(self):
+        solve_response = self.client.post(
+            "/api/solve/",
+            {"operation": "cylinder_volume", "data": {"radius": 4, "height": 9}},
+            format="json",
+        )
+        self.assertEqual(solve_response.status_code, 200)
+
+        history_response = self.client.get("/api/history/")
+        self.assertEqual(history_response.status_code, 200)
+        items = history_response.json()["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["operation"], "cylinder_volume")
+        self.assertEqual(items[0]["dimension"], "3d")
+
+        detail_response = self.client.get(f"/api/history/{items[0]['id']}/")
+        self.assertEqual(detail_response.status_code, 200)
+        replay = detail_response.json()["item"]["response"]
+        self.assertEqual(replay["operation"], "cylinder_volume")
+        self.assertAlmostEqual(replay["result"], 144 * math.pi)
+        self.assertEqual(replay["visualization"]["objects"][-1]["type"], "cylinder")
+
+    def test_failed_solution_is_not_saved_to_history(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "cylinder_volume", "data": {"radius": 4}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.client.get("/api/history/").json()["items"], [])
+
+    def test_history_delete_and_clear(self):
+        for radius in (3, 4):
+            self.client.post(
+                "/api/solve/",
+                {"operation": "circle_area", "data": {"rho": radius}},
+                format="json",
+            )
+        items = self.client.get("/api/history/").json()["items"]
+        self.assertEqual(len(items), 2)
+        delete_response = self.client.delete(f"/api/history/{items[0]['id']}/")
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(len(self.client.get("/api/history/").json()["items"]), 1)
+        clear_response = self.client.delete("/api/history/")
+        self.assertEqual(clear_response.status_code, 200)
+        self.assertEqual(self.client.get("/api/history/").json()["items"], [])
 
     def test_provider_network_errors_are_safe_and_classified(self):
         for exception, code, status_code in (

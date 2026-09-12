@@ -1,8 +1,12 @@
+import { useState } from "react";
+
 import { LoadingMessage } from "./components/chat/LoadingMessage";
 import { ProblemInput } from "./components/chat/ProblemInput";
 import { SolverResponse } from "./components/chat/SolverResponse";
+import { HistoryPanel } from "./components/history/HistoryPanel";
 import { Navbar } from "./components/layout/Navbar";
 import { Sidebar } from "./components/layout/Sidebar";
+import { TopicsPanel } from "./components/topics/TopicsPanel";
 import { useGeometrySolver } from "./hooks/useGeometrySolver";
 
 const examples = [
@@ -13,14 +17,30 @@ const examples = [
 
 function App() {
   const solver = useGeometrySolver();
+  const [activeView, setActiveView] = useState("solver");
+
+  function handleNewProblem() {
+    solver.reset();
+    setActiveView("solver");
+  }
+
+  function handleRestore(response) {
+    solver.restoreSolution(response);
+    setActiveView("solver");
+  }
+
+  function handleUseExample(example) {
+    solver.setQuestion(example);
+    setActiveView("solver");
+  }
 
   return (
     <div className="app-shell">
-      <Navbar onNewProblem={solver.reset} />
+      <Navbar onNewProblem={handleNewProblem} />
       <div className="app-body">
-        <Sidebar onNewProblem={solver.reset} />
+        <Sidebar activeView={activeView} onNavigate={setActiveView} onNewProblem={handleNewProblem} />
         <main className="solver-main">
-          <div className="solver-content">
+          {activeView === "solver" && <div className="solver-content">
             <section className="welcome-block">
               <p className="eyebrow">A calmer way to solve</p>
               <h1>Make geometry<br /><em>click.</em></h1>
@@ -62,7 +82,9 @@ function App() {
               loading={solver.loading}
             />
             <p className="privacy-note">Your question is sent securely to the Geometry engine. Gemini is never called from the browser.</p>
-          </div>
+          </div>}
+          {activeView === "history" && <HistoryPanel onRestore={handleRestore} />}
+          {activeView === "topics" && <TopicsPanel onUseExample={handleUseExample} />}
         </main>
       </div>
     </div>

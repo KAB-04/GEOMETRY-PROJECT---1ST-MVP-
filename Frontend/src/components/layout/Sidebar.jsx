@@ -1,4 +1,4 @@
-export function Sidebar({ onNewProblem }) {
+export function Sidebar({ activeView, onNavigate, onNewProblem }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-intro">
@@ -6,11 +6,15 @@ export function Sidebar({ onNewProblem }) {
         <p>Turn a geometry question into a clear, engine-backed solution.</p>
       </div>
       <nav aria-label="Main navigation">
-        <button className="nav-item active" type="button" onClick={onNewProblem}>
-          <span aria-hidden="true">＋</span> New problem
+        <button className={`nav-item ${activeView === "solver" ? "active" : ""}`} type="button" onClick={onNewProblem}>
+          <span aria-hidden="true">+</span> New problem
         </button>
-        <div className="nav-item muted"><span aria-hidden="true">◷</span> History <small>soon</small></div>
-        <div className="nav-item muted"><span aria-hidden="true">⌁</span> Topics <small>soon</small></div>
+        <button className={`nav-item ${activeView === "history" ? "active" : ""}`} type="button" onClick={() => onNavigate("history")}>
+          <span aria-hidden="true">H</span> History
+        </button>
+        <button className={`nav-item ${activeView === "topics" ? "active" : ""}`} type="button" onClick={() => onNavigate("topics")}>
+          <span aria-hidden="true">T</span> Topics
+        </button>
       </nav>
       <div className="sidebar-note">
         <span className="note-mark">i</span>

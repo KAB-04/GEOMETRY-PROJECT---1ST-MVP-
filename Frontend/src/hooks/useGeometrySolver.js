@@ -38,6 +38,14 @@ export function useGeometrySolver() {
     setError("");
   }
 
+  function restoreSolution(response) {
+    setInputQuestion("");
+    setSubmittedQuestion(response.question || "");
+    setResult(response);
+    setError("");
+    setLoading(false);
+  }
+
   return {
     question: submittedQuestion,
     inputQuestion,
@@ -46,6 +54,7 @@ export function useGeometrySolver() {
     loading,
     error,
     solveProblem,
+    restoreSolution,
     reset,
   };
 }
