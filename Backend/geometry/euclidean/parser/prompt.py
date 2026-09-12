@@ -33,9 +33,17 @@ Rules:
     - distance3d: points (two 3-D point records)
     - midpoint3d: points (two 3-D point records)
     - vector3d: points (two 3-D point records)
+    - line3d: points (two 3-D point records)
     - triangle3d: points (three 3-D point records)
     - plane3d: points (three 3-D point records)
     - cuboid_volume: width, height, depth
+    - cylinder_volume: radius, height
+    - cylinder_lateral_surface_area: radius, height
+    - cylinder_total_surface_area: radius, height
+    - cone_height_from_radius_slant_height: radius, slant_height
+    - cone_volume: radius, height, or radius and slant_height if height must be derived
+    - cone_lateral_surface_area: radius, height, or radius and slant_height
+    - cone_total_surface_area: radius, height, or radius and slant_height
 5. The JSON must contain:
    - operation
    - data
@@ -60,11 +68,35 @@ Transformation rules:
 - For translations, use "translation" with numeric dx and dy.
 - Preserve every named point in the points array. Never reduce a triangle or
     polygon to only its first two points.
+- For 3-D points, preserve x, y, and z. Never discard the z coordinate.
+- If a question gives two points with three coordinates each and asks for
+    distance, return "distance3d", not "distance".
 - A midpoint question must explicitly ask for halfway, midpoint, or the point
     between two endpoints. Coordinates alone do not imply midpoint.
 - If two circles are given and the question asks whether they intersect or asks
     for intersection points, return circle_circle_intersection. Do not return
     distance; center distance is only an intermediate calculation.
+
+2-D versus 3-D shape rules:
+- circle_area is only for a flat 2-D circle and requires only rho.
+- cylinder_volume is for a 3-D cylinder and requires radius and height.
+- cylinder_total_surface_area is for all outside area of a 3-D cylinder and
+    requires radius and height.
+- cylinder_lateral_surface_area is for the curved side area of a 3-D cylinder
+    and requires radius and height.
+- If a question contains cylinder, radius, height, and volume, return
+    cylinder_volume. Never return circle_area for a cylinder volume question.
+- If a cylinder question gives diameter instead of radius, convert diameter to
+    radius and return the radius parameter.
+- Never reduce a cone, cylinder, sphere, cube, cuboid, or 3-D request to a
+    related 2-D shape operation.
+- cone_volume is for a 3-D cone and requires radius plus height. If the
+    question gives radius and slant height and asks for height and volume,
+    return cone_volume with radius and slant_height; the backend will derive
+    height before calculating volume.
+- In a cone, slant height is not the vertical height. Never use pythagoras as
+    the final operation for a cone problem; it is only an intermediate
+    relationship inside the cone solution.
 
 Example 1
 
@@ -186,6 +218,63 @@ Output:
         "x2": 8,
         "y2": 0,
         "r2": 5
+    }
+}
+
+Example 9
+
+User:
+Point A is at (1, 2, 3) and point B is at (5, 5, 6). Find the distance between A and B.
+
+Output:
+{
+    "operation": "distance3d",
+    "data": {
+        "points": [
+            {"id": "A", "x": 1, "y": 2, "z": 3},
+            {"id": "B", "x": 5, "y": 5, "z": 6}
+        ]
+    }
+}
+
+Example 10
+
+User:
+A cylinder has radius 4 cm and height 10 cm. Find its volume.
+
+Output:
+{
+    "operation": "cylinder_volume",
+    "data": {
+        "radius": 4,
+        "height": 10
+    }
+}
+
+Example 11
+
+User:
+A circle has radius 4 cm. Find its area.
+
+Output:
+{
+    "operation": "circle_area",
+    "data": {
+        "rho": 4
+    }
+}
+
+Example 12
+
+User:
+A cone has radius 5 cm and slant height 13 cm. Find its height and volume.
+
+Output:
+{
+    "operation": "cone_volume",
+    "data": {
+        "radius": 5,
+        "slant_height": 13
     }
 }
 

@@ -1,7 +1,9 @@
 import os
 import json
+import logging
 import socket
 import time
+from pathlib import Path
 from urllib import error, request
 
 from dotenv import load_dotenv
@@ -17,7 +19,13 @@ from .exceptions import (
 )
 
 
+BACKEND_DIR = Path(__file__).resolve().parents[3]
+load_dotenv(BACKEND_DIR / ".env")
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+GEMINI_MAX_ATTEMPTS = 3
 
 GEOMETRY_RESPONSE_SCHEMA = {
     "type": "OBJECT",
@@ -45,9 +53,17 @@ GEOMETRY_RESPONSE_SCHEMA = {
                 "distance3d",
                 "midpoint3d",
                 "vector3d",
+                "line3d",
                 "triangle3d",
                 "plane3d",
                 "cuboid_volume",
+                "cylinder_volume",
+                "cylinder_lateral_surface_area",
+                "cylinder_total_surface_area",
+                "cone_height_from_radius_slant_height",
+                "cone_volume",
+                "cone_lateral_surface_area",
+                "cone_total_surface_area",
             ],
         },
         "data": {
@@ -58,10 +74,14 @@ GEOMETRY_RESPONSE_SCHEMA = {
                 "x2": {"type": "NUMBER"},
                 "y2": {"type": "NUMBER"},
                 "rho": {"type": "NUMBER"},
+                "radius": {"type": "NUMBER"},
+                "diameter": {"type": "NUMBER"},
                 "r1": {"type": "NUMBER"},
                 "r2": {"type": "NUMBER"},
                 "base": {"type": "NUMBER"},
                 "height": {"type": "NUMBER"},
+                "slant_height": {"type": "NUMBER"},
+                "l": {"type": "NUMBER"},
                 "angle1": {"type": "NUMBER"},
                 "angle2": {"type": "NUMBER"},
                 "length": {"type": "NUMBER"},
@@ -79,9 +99,18 @@ GEOMETRY_RESPONSE_SCHEMA = {
                             "id": {"type": "STRING"},
                             "x": {"type": "NUMBER"},
                             "y": {"type": "NUMBER"},
+                            "z": {"type": "NUMBER"},
                         },
-                        "required": ["id", "x", "y"],
+                        "required": ["id", "x", "y", "z"],
                     },
+                },
+                "point1": {
+                    "type": "ARRAY",
+                    "items": {"type": "NUMBER"},
+                },
+                "point2": {
+                    "type": "ARRAY",
+                    "items": {"type": "NUMBER"},
                 },
                 "dx": {"type": "NUMBER"},
                 "dy": {"type": "NUMBER"},
@@ -100,57 +129,76 @@ class GeminiClient:
     def __init__(self):
         self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.fallback_enabled = os.getenv("LLM_FALLBACK_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
         if not self.gemini_api_key and not self.groq_api_key:
             raise ValueError("GEMINI_API_KEY or GROQ_API_KEY not found.")
+
+        self.primary_model = os.getenv("GEMINI_PRIMARY_MODEL") or os.getenv("GEMINI_MODEL")
+        self.fallback_model = os.getenv("GEMINI_FALLBACK_MODEL")
+        if self.gemini_api_key and not self.primary_model:
+            raise ValueError("GEMINI_PRIMARY_MODEL not found.")
 
         self.client = (
             genai.Client(api_key=self.gemini_api_key)
             if self.gemini_api_key
             else None
         )
-        self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
         self.groq_model = os.getenv("GROQ_MODEL")
-        if not self.groq_model:
+        if not self.gemini_api_key and self.groq_api_key and not self.groq_model:
             raise ValueError("GROQ_MODEL not found.")
-        self.fallback_enabled = os.getenv("LLM_FALLBACK_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
         self.groq_url = "https://api.groq.com/openai/v1/chat/completions"
 
     def generate(self, prompt):
         if self.client is not None:
-            gemini_error = None
-            for attempt in range(3):
-                try:
-                    response = self.client.models.generate_content(
-                        model=self.model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=GEOMETRY_RESPONSE_SCHEMA,
-                        ),
-                    )
-                    return response.text
-                except Exception as error:
-                    gemini_error = error
-                    provider_error = self._classify_gemini_error(error)
-                    if not isinstance(provider_error, ProviderUnavailable):
-                        break
-                    if attempt < 2:
-                        time.sleep(2**attempt)
-
-            provider_error = self._classify_gemini_error(gemini_error)
-            if provider_error is not None:
-                if not self.fallback_enabled:
+            try:
+                return self._generate_with_gemini_model(prompt, self.primary_model, "primary")
+            except ProviderUnavailable as primary_unavailable:
+                if self.fallback_model:
+                    logger.info("Switching to Gemini secondary model after primary availability failures.")
+                    try:
+                        return self._generate_with_gemini_model(prompt, self.fallback_model, "secondary")
+                    except ProviderUnavailable as secondary_unavailable:
+                        if not self.fallback_enabled:
+                            raise secondary_unavailable from primary_unavailable
+                elif not self.fallback_enabled:
+                    raise primary_unavailable
+            except Exception as gemini_error:
+                provider_error = self._classify_gemini_error(gemini_error)
+                if provider_error is not None:
                     raise provider_error from gemini_error
-            elif not self.fallback_enabled or not self.groq_api_key:
-                raise gemini_error
-            if not self.fallback_enabled:
-                raise gemini_error
+                if not self.fallback_enabled or not self.groq_api_key:
+                    raise
 
         if not self.groq_api_key:
             raise ValueError("GROQ_API_KEY not found.")
 
         return self._generate_with_groq(prompt)
+
+    def _generate_with_gemini_model(self, prompt, model, role):
+        gemini_error = None
+        for attempt in range(GEMINI_MAX_ATTEMPTS):
+            try:
+                response = self.client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=GEOMETRY_RESPONSE_SCHEMA,
+                    ),
+                )
+                logger.info("Gemini %s attempt %s succeeded.", role, attempt + 1)
+                return response.text
+            except Exception as error:
+                gemini_error = error
+                provider_error = self._classify_gemini_error(error)
+                if not isinstance(provider_error, ProviderUnavailable):
+                    raise error
+                logger.warning("Gemini %s attempt %s returned temporary availability failure.", role, attempt + 1)
+                if attempt < GEMINI_MAX_ATTEMPTS - 1:
+                    time.sleep(2**attempt)
+
+        raise ProviderUnavailable("Gemini is temporarily busy.") from gemini_error
 
     @staticmethod
     def _classify_gemini_error(gemini_error):

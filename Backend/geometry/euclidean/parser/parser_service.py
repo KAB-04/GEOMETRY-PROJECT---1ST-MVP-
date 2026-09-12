@@ -25,6 +25,18 @@ class ParserService:
         "area_of_circle": "circle_area",
         "distance_between_points": "distance",
         "straight_line_distance": "distance",
+        "distance_3d": "distance3d",
+        "3d_distance": "distance3d",
+        "midpoint_3d": "midpoint3d",
+        "3d_midpoint": "midpoint3d",
+        "vector_3d": "vector3d",
+        "3d_vector": "vector3d",
+        "line_3d": "line3d",
+        "3d_line": "line3d",
+        "triangle_3d": "triangle3d",
+        "3d_triangle": "triangle3d",
+        "plane_3d": "plane3d",
+        "3d_plane": "plane3d",
         "triangle area": "triangle_area",
         "area_of_triangle": "triangle_area",
         "mid_point": "midpoint",
@@ -32,6 +44,27 @@ class ParserService:
         "third_triangle_angle": "triangle_third_angle",
         "third_angle": "triangle_third_angle",
         "triangle_angle_sum": "triangle_third_angle",
+        "volume_of_cylinder": "cylinder_volume",
+        "cylinder volume": "cylinder_volume",
+        "cylinder_surface_area": "cylinder_total_surface_area",
+        "surface_area_of_cylinder": "cylinder_total_surface_area",
+        "total_cylinder_surface_area": "cylinder_total_surface_area",
+        "cylinder_curved_surface_area": "cylinder_lateral_surface_area",
+        "curved_surface_area_of_cylinder": "cylinder_lateral_surface_area",
+        "cylinder_lateral_area": "cylinder_lateral_surface_area",
+        "lateral_area_of_cylinder": "cylinder_lateral_surface_area",
+        "height_of_cone": "cone_height_from_radius_slant_height",
+        "cone_height": "cone_height_from_radius_slant_height",
+        "cone_altitude": "cone_height_from_radius_slant_height",
+        "volume_of_cone": "cone_volume",
+        "cone volume": "cone_volume",
+        "cone_surface_area": "cone_total_surface_area",
+        "surface_area_of_cone": "cone_total_surface_area",
+        "total_cone_surface_area": "cone_total_surface_area",
+        "cone_curved_surface_area": "cone_lateral_surface_area",
+        "curved_surface_area_of_cone": "cone_lateral_surface_area",
+        "cone_lateral_area": "cone_lateral_surface_area",
+        "lateral_area_of_cone": "cone_lateral_surface_area",
     }
 
     DATA_FIELD_ALIASES = ("data", "parameters", "params", "arguments", "inputs")
@@ -88,9 +121,53 @@ class ParserService:
             "l": "length",
             "w": "width",
         },
+        "cylinder_volume": {
+            "r": "radius",
+            "rho": "radius",
+            "h": "height",
+        },
+        "cylinder_lateral_surface_area": {
+            "r": "radius",
+            "rho": "radius",
+            "h": "height",
+        },
+        "cylinder_total_surface_area": {
+            "r": "radius",
+            "rho": "radius",
+            "h": "height",
+        },
+        "cone_height_from_radius_slant_height": {
+            "r": "radius",
+            "rho": "radius",
+            "l": "slant_height",
+            "slant": "slant_height",
+        },
+        "cone_volume": {
+            "r": "radius",
+            "rho": "radius",
+            "h": "height",
+            "l": "slant_height",
+            "slant": "slant_height",
+        },
+        "cone_lateral_surface_area": {
+            "r": "radius",
+            "rho": "radius",
+            "h": "height",
+            "l": "slant_height",
+            "slant": "slant_height",
+        },
+        "cone_total_surface_area": {
+            "r": "radius",
+            "rho": "radius",
+            "h": "height",
+            "l": "slant_height",
+            "slant": "slant_height",
+        },
     }
 
     POINT_OPERATIONS = {"distance", "midpoint", "slope"}
+    CYLINDER_OPERATIONS = {"cylinder_volume", "cylinder_lateral_surface_area", "cylinder_total_surface_area"}
+    CONE_OPERATIONS = {"cone_height_from_radius_slant_height", "cone_volume", "cone_lateral_surface_area", "cone_total_surface_area"}
     TRANSFORMATION_CUES = re.compile(
         r"\b(reflect(?:ion)?|mirror|translat(?:e|ion)|shift|rotat(?:e|ion)|turn)\b",
         re.IGNORECASE,
@@ -98,6 +175,16 @@ class ParserService:
     CIRCLE_INTERSECTION_CUES = re.compile(
         r"\bcircles?\b.*\b(intersect|intersection|touch|tangent)\b",
         re.IGNORECASE | re.DOTALL,
+    )
+    CYLINDER_CUES = re.compile(r"\bcylinders?\b", re.IGNORECASE)
+    CONE_CUES = re.compile(r"\bcones?\b", re.IGNORECASE)
+    CYLINDER_VOLUME_CUES = re.compile(r"\b(volume|capacity|v)\b", re.IGNORECASE)
+    CYLINDER_TOTAL_SURFACE_CUES = re.compile(r"\b(total\s+surface\s+area|surface\s+area)\b", re.IGNORECASE)
+    CYLINDER_LATERAL_SURFACE_CUES = re.compile(r"\b(lateral|curved)\s+(?:surface\s+)?area\b", re.IGNORECASE)
+    HEIGHT_CUES = re.compile(r"\b(height|altitude|vertical\s+height|h)\b", re.IGNORECASE)
+    DANGEROUS_3D_TO_2D_CUES = re.compile(
+        r"\b(cones?|cylinders?|spheres?|cuboids?|cubes?|3[-\s]?d|three[-\s]?dimensional)\b",
+        re.IGNORECASE,
     )
 
     def __init__(self):
@@ -138,10 +225,17 @@ User Question:
                 raise UnsupportedGeometryOperation(
                     "The question requests circle intersection, but it was not interpreted as one."
                 )
-            return {
-                "operation": operation,
-                "data": self._normalize_data(operation, result, question),
-            }
+            operation = self._correct_supported_semantic_operation(operation, question)
+            if operation in {"circle_area", "circle_circumference", "rectangle_area", "rectangle_perimeter", "triangle_area", "triangle_perimeter", "distance", "midpoint", "slope"} and self.DANGEROUS_3D_TO_2D_CUES.search(question):
+                raise UnsupportedGeometryOperation(
+                    "The question requests a 3-D geometry operation, but it was interpreted as a related 2-D operation."
+                )
+            data = self._normalize_data(operation, result, question)
+            response = {"operation": operation, "data": data}
+            semantic_problem = self._semantic_problem_from_interpretation(operation, data, question)
+            if semantic_problem:
+                response["semantic_problem"] = semantic_problem
+            return response
 
         except json.JSONDecodeError:
 
@@ -183,6 +277,28 @@ User Question:
         return operation.strip().lower().replace(" ", "_").replace("-", "_")
 
     @classmethod
+    def _correct_supported_semantic_operation(cls, operation, question):
+        if cls.CONE_CUES.search(question):
+            if cls.CYLINDER_LATERAL_SURFACE_CUES.search(question):
+                return "cone_lateral_surface_area"
+            if cls.CYLINDER_TOTAL_SURFACE_CUES.search(question):
+                return "cone_total_surface_area"
+            if cls.CYLINDER_VOLUME_CUES.search(question):
+                return "cone_volume"
+            if cls.HEIGHT_CUES.search(question):
+                return "cone_height_from_radius_slant_height"
+            return operation
+        if not cls.CYLINDER_CUES.search(question):
+            return operation
+        if cls.CYLINDER_LATERAL_SURFACE_CUES.search(question):
+            return "cylinder_lateral_surface_area"
+        if cls.CYLINDER_TOTAL_SURFACE_CUES.search(question):
+            return "cylinder_total_surface_area"
+        if cls.CYLINDER_VOLUME_CUES.search(question):
+            return "cylinder_volume"
+        return operation
+
+    @classmethod
     def _normalize_data(cls, operation, result, question=""):
         raw_data = None
         for field in cls.DATA_FIELD_ALIASES:
@@ -195,13 +311,17 @@ User Question:
         if not isinstance(raw_data, dict):
             raise InvalidGeminiResponse("Gemini response data must be an object.")
 
-        if operation in {"distance3d", "midpoint3d", "vector3d", "triangle3d", "plane3d"}:
-            return cls._normalize_3d_data(raw_data)
+        if operation in {"distance3d", "midpoint3d", "vector3d", "line3d", "triangle3d", "plane3d"}:
+            return cls._normalize_3d_data(operation, raw_data, question)
         if operation == "transform":
             return cls._normalize_transform_data(raw_data)
 
         if operation == "circle_circle_intersection":
             raw_data = cls._complete_circle_intersection_data(raw_data, question)
+        if operation in cls.CYLINDER_OPERATIONS:
+            raw_data = cls._complete_cylinder_data(raw_data, question)
+        if operation in cls.CONE_OPERATIONS:
+            raw_data = cls._complete_cone_data(raw_data, question)
 
         raw_data = cls._normalize_point_data(operation, raw_data)
         aliases = cls.PARAMETER_ALIASES.get(operation, {})
@@ -217,23 +337,206 @@ User Question:
 
         if operation == "circle_circle_intersection":
             normalized = {key: normalized[key] for key in ("x1", "y1", "r1", "x2", "y2", "r2") if key in normalized}
+        if operation in cls.CYLINDER_OPERATIONS:
+            normalized = {key: normalized[key] for key in ("radius", "height") if key in normalized}
+        if operation in cls.CONE_OPERATIONS:
+            normalized = {key: normalized[key] for key in ("radius", "height", "slant_height") if key in normalized}
 
         return normalized
 
     @classmethod
-    def _normalize_3d_data(cls, raw_data):
-        points = raw_data.get("points")
-        if not isinstance(points, list):
-            raise InvalidGeminiResponse("3-D operations require a points list.")
+    def _complete_cylinder_data(cls, raw_data, question):
+        completed = dict(raw_data)
+        if "radius" not in completed and "r" not in completed and "diameter" not in completed:
+            radius = re.search(r"\bradius\s*(?:of|=|is)?\s*(-?\d+(?:\.\d+)?)", question, re.IGNORECASE)
+            if radius:
+                completed["radius"] = cls._normalize_number(radius.group(1))
+        if "height" not in completed and "h" not in completed:
+            height = re.search(r"\bheight\s*(?:of|=|is)?\s*(-?\d+(?:\.\d+)?)", question, re.IGNORECASE)
+            if height:
+                completed["height"] = cls._normalize_number(height.group(1))
+        if "diameter" not in completed:
+            diameter = re.search(r"\bdiameter\s*(?:of|=|is)?\s*(-?\d+(?:\.\d+)?)", question, re.IGNORECASE)
+            if diameter:
+                completed["diameter"] = cls._normalize_number(diameter.group(1))
+        if "radius" not in completed and "r" not in completed and "diameter" in completed:
+            diameter_value = cls._normalize_number(completed["diameter"])
+            if isinstance(diameter_value, (int, float)):
+                completed["radius"] = diameter_value / 2
+        return completed
+
+    @classmethod
+    def _complete_cone_data(cls, raw_data, question):
+        completed = dict(raw_data)
+        if "radius" not in completed and "r" not in completed and "diameter" not in completed:
+            radius = re.search(r"\bradius\s*(?:of|=|is)?\s*(-?\d+(?:\.\d+)?)", question, re.IGNORECASE)
+            if radius:
+                completed["radius"] = cls._normalize_number(radius.group(1))
+        if "height" not in completed and "h" not in completed:
+            height = re.search(r"(?<!slant\s)\b(?:vertical\s+)?height\s*(?:of|=|is)?\s*(-?\d+(?:\.\d+)?)", question, re.IGNORECASE)
+            if height:
+                completed["height"] = cls._normalize_number(height.group(1))
+        if "slant_height" not in completed and "l" not in completed:
+            slant = re.search(
+                r"\b(?:slant\s+height|sloping\s+edge)\b(?:\s+of\s+(?:a\s+)?cone)?\s*(?:=|is|measures)?\s*(-?\d+(?:\.\d+)?)",
+                question,
+                re.IGNORECASE,
+            )
+            if slant:
+                completed["slant_height"] = cls._normalize_number(slant.group(1))
+        if "diameter" not in completed:
+            diameter = re.search(r"\bdiameter\s*(?:of|=|is)?\s*(-?\d+(?:\.\d+)?)", question, re.IGNORECASE)
+            if diameter:
+                completed["diameter"] = cls._normalize_number(diameter.group(1))
+        if "radius" not in completed and "r" not in completed and "diameter" in completed:
+            diameter_value = cls._normalize_number(completed["diameter"])
+            if isinstance(diameter_value, (int, float)):
+                completed["radius"] = diameter_value / 2
+        return completed
+
+    @classmethod
+    def _semantic_problem_from_interpretation(cls, operation, data, question):
+        if cls.CONE_CUES.search(question) or operation in cls.CONE_OPERATIONS:
+            return {
+                "geometry_type": "cone",
+                "dimension": "3d",
+                "given": {key: data[key] for key in ("radius", "height", "slant_height") if key in data},
+                "requested": cls._requested_cone_outputs(question, operation),
+            }
+        if cls.CYLINDER_CUES.search(question) or operation in cls.CYLINDER_OPERATIONS:
+            return {
+                "geometry_type": "cylinder",
+                "dimension": "3d",
+                "given": {key: data[key] for key in ("radius", "height") if key in data},
+                "requested": cls._requested_cylinder_outputs(question, operation),
+            }
+        return None
+
+    @classmethod
+    def _requested_cone_outputs(cls, question, operation):
+        requested = []
+        if cls.HEIGHT_CUES.search(question) or operation == "cone_height_from_radius_slant_height":
+            requested.append("height")
+        if cls.CYLINDER_VOLUME_CUES.search(question) or operation == "cone_volume":
+            requested.append("volume")
+        if cls.CYLINDER_LATERAL_SURFACE_CUES.search(question) or operation == "cone_lateral_surface_area":
+            requested.append("lateral_surface_area")
+        if cls.CYLINDER_TOTAL_SURFACE_CUES.search(question) or operation == "cone_total_surface_area":
+            requested.append("total_surface_area")
+        return requested
+
+    @classmethod
+    def _requested_cylinder_outputs(cls, question, operation):
+        requested = []
+        if cls.CYLINDER_VOLUME_CUES.search(question) or operation == "cylinder_volume":
+            requested.append("volume")
+        if cls.CYLINDER_LATERAL_SURFACE_CUES.search(question) or operation == "cylinder_lateral_surface_area":
+            requested.append("lateral_surface_area")
+        if cls.CYLINDER_TOTAL_SURFACE_CUES.search(question) or operation == "cylinder_total_surface_area":
+            requested.append("total_surface_area")
+        return requested
+
+    @classmethod
+    def _normalize_3d_data(cls, operation, raw_data, question=""):
+        points = cls._extract_3d_points(raw_data)
+        if len(points) < cls._required_3d_point_count(operation):
+            points = cls._extract_3d_points_from_question(question) or points
+
+        required_count = cls._required_3d_point_count(operation)
+        if len(points) < required_count:
+            raise InvalidGeminiResponse(f"3-D operations require at least {required_count} valid points.")
+
         normalized = {"points": []}
-        for point in points:
-            if not isinstance(point, dict) or not isinstance(point.get("id"), str):
-                raise InvalidGeminiResponse("Each 3-D point requires an id, x, y, and z.")
-            values = {axis: cls._normalize_number(point.get(axis)) for axis in ("x", "y", "z")}
-            if not all(isinstance(values[axis], (int, float)) for axis in values):
-                raise InvalidGeminiResponse("3-D point coordinates must be numeric.")
-            normalized["points"].append({"id": point["id"], **values})
+        for index, point in enumerate(points[:required_count]):
+            normalized["points"].append(cls._normalize_3d_point(point, index))
         return normalized
+
+    @classmethod
+    def _extract_3d_points(cls, raw_data):
+        candidates = []
+        points = raw_data.get("points")
+        if isinstance(points, list):
+            candidates.extend(points)
+
+        for key in ("point1", "p1", "from", "start", "A", "a"):
+            if key in raw_data:
+                candidates.append(raw_data[key])
+                break
+        for key in ("point2", "p2", "to", "end", "B", "b"):
+            if key in raw_data:
+                candidates.append(raw_data[key])
+                break
+        for key in ("point3", "p3", "C", "c"):
+            if key in raw_data:
+                candidates.append(raw_data[key])
+                break
+
+        if all(key in raw_data for key in ("x1", "y1", "z1")):
+            candidates.append({"id": "A", "x": raw_data["x1"], "y": raw_data["y1"], "z": raw_data["z1"]})
+        if all(key in raw_data for key in ("x2", "y2", "z2")):
+            candidates.append({"id": "B", "x": raw_data["x2"], "y": raw_data["y2"], "z": raw_data["z2"]})
+        if all(key in raw_data for key in ("x3", "y3", "z3")):
+            candidates.append({"id": "C", "x": raw_data["x3"], "y": raw_data["y3"], "z": raw_data["z3"]})
+
+        return candidates
+
+    @classmethod
+    def _normalize_3d_point(cls, point, index):
+        point_id = chr(ord("A") + index)
+        if isinstance(point, dict):
+            if isinstance(point.get("id"), str) and point["id"].strip():
+                point_id = point["id"].strip()
+            values = [point.get(axis) for axis in ("x", "y", "z")]
+        elif isinstance(point, (list, tuple)):
+            if len(point) != 3:
+                raise InvalidGeminiResponse("3-D point arrays must contain exactly three coordinates.")
+            values = list(point)
+        else:
+            raise InvalidGeminiResponse("Each 3-D point must be an object or a three-coordinate array.")
+
+        coordinates = [cls._coerce_numeric_coordinate(value) for value in values]
+        return {"id": point_id, "x": coordinates[0], "y": coordinates[1], "z": coordinates[2]}
+
+    @staticmethod
+    def _coerce_numeric_coordinate(value):
+        if isinstance(value, bool):
+            raise InvalidGeminiResponse("3-D point coordinates must be numeric.")
+        if isinstance(value, (int, float)):
+            return value
+        if not isinstance(value, str):
+            raise InvalidGeminiResponse("3-D point coordinates must be numeric.")
+
+        stripped = value.strip()
+        if not re.fullmatch(r"-?(?:\d+(?:\.\d*)?|\.\d+)", stripped):
+            raise InvalidGeminiResponse("3-D point coordinates must be numeric.")
+        return ParserService._normalize_number(stripped)
+
+    @staticmethod
+    def _required_3d_point_count(operation):
+        if operation in {"triangle3d", "plane3d"}:
+            return 3
+        return 2
+
+    @classmethod
+    def _extract_3d_points_from_question(cls, question):
+        if not question:
+            return []
+        number = r"-?\d+(?:\.\d+)?"
+        pattern = re.compile(
+            rf"(?:\b(?:point\s+)?(?P<label>[A-Z])\b[^\(\n]{{0,40}})?\(\s*(?P<x>{number})\s*,\s*(?P<y>{number})\s*,\s*(?P<z>{number})\s*\)"
+        )
+        points = []
+        for index, match in enumerate(pattern.finditer(question)):
+            label = match.group("label") or chr(ord("A") + index)
+            points.append(
+                {
+                    "id": label,
+                    "x": cls._normalize_number(match.group("x")),
+                    "y": cls._normalize_number(match.group("y")),
+                    "z": cls._normalize_number(match.group("z")),
+                }
+            )
+        return points
 
     @classmethod
     def _complete_circle_intersection_data(cls, raw_data, question):

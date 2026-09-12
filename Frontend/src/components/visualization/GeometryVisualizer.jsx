@@ -1,5 +1,9 @@
+import { lazy, Suspense } from "react";
 import { Canvas2D } from "./Canvas2D";
-import { ThreeDVisualizer } from "./ThreeDVisualizer";
+
+const ThreeDVisualizer = lazy(() =>
+  import("./ThreeDVisualizer").then((module) => ({ default: module.ThreeDVisualizer }))
+);
 
 export function GeometryVisualizer({ visualization }) {
   if (!visualization) return null;
@@ -10,7 +14,11 @@ export function GeometryVisualizer({ visualization }) {
     return <div className="visualization-empty">A diagram is not available for this operation yet.</div>;
   }
   if (visualization.dimension === "3d" && visualization.objects?.length) {
-    return <ThreeDVisualizer visualization={visualization} />;
+    return (
+      <Suspense fallback={<div className="visualization-empty">Preparing the 3-D diagram...</div>}>
+        <ThreeDVisualizer visualization={visualization} />
+      </Suspense>
+    );
   }
   if (visualization.dimension === "3d") {
     return <div className="visualization-empty">A 3-D diagram is not available for this operation yet.</div>;

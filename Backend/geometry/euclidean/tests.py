@@ -25,17 +25,23 @@ DISTANCE_WORD_PROBLEM = (
 
 
 class GeminiRetryTests(SimpleTestCase):
-    def make_client(self, responses):
+    def make_client(self, responses, env=None):
         fake_client = MagicMock()
         fake_client.models.generate_content.side_effect = responses
+        environment = {
+            "GEMINI_API_KEY": "test-gemini-key",
+            "GEMINI_PRIMARY_MODEL": "gemini-primary",
+            "GEMINI_FALLBACK_MODEL": "",
+            "GEMINI_MODEL": "",
+            "GROQ_API_KEY": "",
+            "GROQ_MODEL": "",
+            "LLM_FALLBACK_ENABLED": "false",
+        }
+        if env:
+            environment.update(env)
         with patch.dict(
             os.environ,
-            {
-                "GEMINI_API_KEY": "test-gemini-key",
-                "GROQ_API_KEY": "",
-                "GROQ_MODEL": "qwen/qwen3.6-27b",
-                "LLM_FALLBACK_ENABLED": "false",
-            },
+            environment,
             clear=False,
         ), patch("euclidean.parser.gemini_client.genai.Client", return_value=fake_client):
             client = GeminiClient()
@@ -45,12 +51,32 @@ class GeminiRetryTests(SimpleTestCase):
     def unavailable_error():
         return ServerError(503, {"error": {"status": "UNAVAILABLE"}})
 
+    def test_gemini_primary_success_does_not_call_secondary(self):
+        response = MagicMock(text='{"status":"ok"}')
+        client, fake_client = self.make_client(
+            [response],
+            env={"GEMINI_FALLBACK_MODEL": "gemini-secondary"},
+        )
+        self.assertEqual(client.generate("test"), '{"status":"ok"}')
+        self.assertEqual(fake_client.models.generate_content.call_count, 1)
+        self.assertEqual(
+            fake_client.models.generate_content.call_args.kwargs["model"],
+            "gemini-primary",
+        )
+
     def test_gemini_503_then_success_retries_once(self):
         response = MagicMock(text='{"status":"ok"}')
-        client, fake_client = self.make_client([self.unavailable_error(), response])
+        client, fake_client = self.make_client(
+            [self.unavailable_error(), response],
+            env={"GEMINI_FALLBACK_MODEL": "gemini-secondary"},
+        )
         with patch("euclidean.parser.gemini_client.time.sleep") as sleep:
             self.assertEqual(client.generate("test"), '{"status":"ok"}')
         self.assertEqual(fake_client.models.generate_content.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["model"] for call in fake_client.models.generate_content.call_args_list],
+            ["gemini-primary", "gemini-primary"],
+        )
         sleep.assert_called_once_with(1)
 
     def test_gemini_two_503s_then_success_retries_twice(self):
@@ -68,14 +94,58 @@ class GeminiRetryTests(SimpleTestCase):
                 client.generate("test")
         self.assertEqual(fake_client.models.generate_content.call_count, 3)
 
+    def test_gemini_primary_exhausts_503_then_secondary_succeeds(self):
+        response = MagicMock(text='{"operation":"distance","data":{"x1":0,"y1":0,"x2":3,"y2":4}}')
+        client, fake_client = self.make_client(
+            [self.unavailable_error(), self.unavailable_error(), self.unavailable_error(), response],
+            env={"GEMINI_FALLBACK_MODEL": "gemini-secondary"},
+        )
+        with patch("euclidean.parser.gemini_client.time.sleep"):
+            self.assertEqual(
+                client.generate("test"),
+                '{"operation":"distance","data":{"x1":0,"y1":0,"x2":3,"y2":4}}',
+            )
+        self.assertEqual(
+            [call.kwargs["model"] for call in fake_client.models.generate_content.call_args_list],
+            ["gemini-primary", "gemini-primary", "gemini-primary", "gemini-secondary"],
+        )
+
+    def test_gemini_primary_and_secondary_exhaust_503s_return_unavailable(self):
+        client, fake_client = self.make_client(
+            [self.unavailable_error()] * 6,
+            env={"GEMINI_FALLBACK_MODEL": "gemini-secondary"},
+        )
+        with patch("euclidean.parser.gemini_client.time.sleep"):
+            with self.assertRaises(ProviderUnavailable):
+                client.generate("test")
+        self.assertEqual(fake_client.models.generate_content.call_count, 6)
+
+    def test_gemini_invalid_api_key_does_not_call_secondary(self):
+        invalid_key = ClientError(403, {"error": {"status": "PERMISSION_DENIED"}})
+        client, fake_client = self.make_client(
+            [invalid_key],
+            env={"GEMINI_FALLBACK_MODEL": "gemini-secondary"},
+        )
+        with self.assertRaises(ProviderAccessDenied):
+            client.generate("test")
+        self.assertEqual(fake_client.models.generate_content.call_count, 1)
+
     def test_gemini_429_is_rate_limited_without_503_retry(self):
         rate_limit = ClientError(429, {"error": {"status": "RESOURCE_EXHAUSTED"}})
-        client, fake_client = self.make_client([rate_limit])
+        client, fake_client = self.make_client(
+            [rate_limit],
+            env={"GEMINI_FALLBACK_MODEL": "gemini-secondary"},
+        )
         with patch("euclidean.parser.gemini_client.time.sleep") as sleep:
             with self.assertRaises(ProviderRateLimited):
                 client.generate("test")
         self.assertEqual(fake_client.models.generate_content.call_count, 1)
         sleep.assert_not_called()
+
+    def test_gemini_does_not_require_groq_model_when_groq_fallback_disabled(self):
+        response = MagicMock(text='{"status":"ok"}')
+        client, _ = self.make_client([response], env={"GROQ_MODEL": ""})
+        self.assertEqual(client.generate("test"), '{"status":"ok"}')
 
 
 class SupportedOperationsTests(SimpleTestCase):
@@ -87,6 +157,12 @@ class SupportedOperationsTests(SimpleTestCase):
         self.assertIn("triangle_perimeter", SUPPORTED_OPERATIONS)
         self.assertIn("triangle_third_angle", SUPPORTED_OPERATIONS)
         self.assertIn("midpoint", SUPPORTED_OPERATIONS)
+        self.assertIn("line3d", SUPPORTED_OPERATIONS)
+        self.assertIn("cylinder_volume", SUPPORTED_OPERATIONS)
+        self.assertIn("cylinder_lateral_surface_area", SUPPORTED_OPERATIONS)
+        self.assertIn("cylinder_total_surface_area", SUPPORTED_OPERATIONS)
+        self.assertIn("cone_height_from_radius_slant_height", SUPPORTED_OPERATIONS)
+        self.assertIn("cone_volume", SUPPORTED_OPERATIONS)
         self.assertNotIn("_fmt", SUPPORTED_OPERATIONS)
 
 
@@ -168,6 +244,97 @@ class SolveApiTests(SimpleTestCase):
         self.assertAlmostEqual(response.json()["result"], math.sqrt(34))
         self.assertEqual(response.json()["visualization"]["dimension"], "3d")
         self.assertEqual([item["type"] for item in response.json()["visualization"]["objects"]], ["point3d", "point3d", "segment3d"])
+        self.assertEqual(response.json()["visualization"]["objects"][-1]["label"], "5.83 units")
+
+    def test_3d_distance_accepts_array_points(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "distance3d", "data": {"point1": [1, 2, 3], "point2": [5, 5, 6]}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.json()["result"], math.sqrt(34))
+        self.assertEqual(response.json()["visualization"]["objects"][0]["z"], 3)
+
+    def test_3d_distance_accepts_numeric_string_array_points(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "distance3d", "data": {"point1": ["1", "2", "3"], "point2": ["5", "5", "6"]}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.json()["result"], math.sqrt(34))
+        self.assertIsInstance(response.json()["visualization"]["objects"][0]["x"], int)
+
+    def test_3d_distance_accepts_object_points(self):
+        response = self.client.post(
+            "/api/solve/",
+            {
+                "operation": "distance3d",
+                "data": {
+                    "point1": {"x": 1, "y": 2, "z": 3},
+                    "point2": {"x": 5, "y": 5, "z": 6},
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.json()["result"], math.sqrt(34))
+
+    def test_3d_distance_rejects_non_numeric_coordinates(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "distance3d", "data": {"point1": ["one", 2, 3], "point2": [5, 5, 6]}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_GEOMETRY_PARAMETERS")
+
+    def test_3d_distance_rejects_incomplete_array_points(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "distance3d", "data": {"point1": [1, 2], "point2": [5, 5, 6]}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_GEOMETRY_PARAMETERS")
+
+    def test_3d_distance_preserves_z_coordinate(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "distance3d", "data": {"point1": [0, 0, 100], "point2": [0, 0, 103]}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"], 3.0)
+        self.assertEqual(response.json()["visualization"]["objects"][0]["z"], 100)
+        self.assertEqual(response.json()["visualization"]["objects"][1]["z"], 103)
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_3d_distance_word_problem_recovers_when_gemini_omits_z(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"distance3d","data":{"points":[{"id":"A","x":1,"y":2}]}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {
+                    "question": (
+                        "Point A is at (1, 2, 3) and point B is at (5, 5, 6). "
+                        "Find the distance between A and B."
+                    )
+                },
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.json()["result"], math.sqrt(34))
+        self.assertEqual(
+            response.json()["visualization"]["objects"][:2],
+            [
+                {"type": "point3d", "id": "A", "x": 1, "y": 2, "z": 3, "label": "A"},
+                {"type": "point3d", "id": "B", "x": 5, "y": 5, "z": 6, "label": "B"},
+            ],
+        )
 
     def test_3d_midpoint_preserves_z_coordinate(self):
         response = self.client.post(
@@ -182,15 +349,28 @@ class SolveApiTests(SimpleTestCase):
     def test_3d_vector_triangle_plane_and_cuboid_contracts(self):
         points = [{"id": "A", "x": 0, "y": 0, "z": 0}, {"id": "B", "x": 5, "y": 0, "z": 0}, {"id": "C", "x": 2, "y": 3, "z": 4}]
         vector = self.client.post("/api/solve/", {"operation": "vector3d", "data": {"points": points[:2]}}, format="json")
+        line = self.client.post("/api/solve/", {"operation": "line3d", "data": {"points": points[:2]}}, format="json")
         triangle = self.client.post("/api/solve/", {"operation": "triangle3d", "data": {"points": points}}, format="json")
         plane = self.client.post("/api/solve/", {"operation": "plane3d", "data": {"points": points}}, format="json")
         cuboid = self.client.post("/api/solve/", {"operation": "cuboid_volume", "data": {"width": 5, "height": 3, "depth": 4}}, format="json")
         self.assertEqual(vector.status_code, triangle.status_code, 200)
         self.assertEqual(vector.json()["visualization"]["objects"][-1]["type"], "vector3d")
+        self.assertEqual(line.status_code, 200)
+        self.assertEqual(line.json()["visualization"]["objects"][-1]["type"], "line3d")
         self.assertEqual(triangle.json()["visualization"]["objects"][-1]["type"], "triangle3d")
         self.assertEqual(plane.json()["visualization"]["objects"][-1]["type"], "plane")
+        self.assertIn("normal", plane.json()["result"])
         self.assertEqual(cuboid.json()["result"], 60)
         self.assertEqual(cuboid.json()["visualization"]["objects"][-1]["type"], "cuboid")
+
+    def test_malformed_3d_payload_returns_controlled_error(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "distance3d", "data": {"points": [{"id": "A", "x": 1, "y": 2}]}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_GEOMETRY_PARAMETERS")
 
     def test_unsupported_operation_is_rejected(self):
         response = self.client.post(
@@ -243,6 +423,149 @@ class SolveApiTests(SimpleTestCase):
         self.assertAlmostEqual(response.json()["result"], math.pi * 49)
         object_types = [item["type"] for item in response.json()["visualization"]["objects"]]
         self.assertEqual(object_types, ["point", "circle", "segment", "point"])
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_cylinder_volume_word_problem_does_not_route_to_circle_area(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"circle_area","data":{"radius":4,"height":10}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {"question": "A cylinder has radius 4 cm and height 10 cm. Find its volume."},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["operation"], "cylinder_volume")
+        self.assertAlmostEqual(body["result"], 160 * math.pi)
+        self.assertEqual(body["visualization"]["dimension"], "3d")
+        self.assertEqual(body["visualization"]["objects"][-1]["type"], "cylinder")
+        self.assertNotEqual(body["result"], 16 * math.pi)
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_circle_area_word_problem_stays_2d_circle(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"circle_area","data":{"rho":4}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {"question": "A circle has radius 4 cm. Find its area."},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["operation"], "circle_area")
+        self.assertAlmostEqual(response.json()["result"], 16 * math.pi)
+        self.assertEqual(response.json()["visualization"]["dimension"], "2d")
+
+    def test_cylinder_volume_direct_operation(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "cylinder_volume", "data": {"radius": 5, "height": 8}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.json()["result"], 200 * math.pi)
+        self.assertEqual(response.json()["visualization"]["dimension"], "3d")
+        self.assertEqual(response.json()["visualization"]["objects"][-1]["type"], "cylinder")
+
+    def test_cylinder_total_surface_area_direct_operation(self):
+        response = self.client.post(
+            "/api/solve/",
+            {"operation": "cylinder_total_surface_area", "data": {"radius": 5, "height": 8}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.json()["result"], 130 * math.pi)
+        self.assertEqual(response.json()["visualization"]["dimension"], "3d")
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_cylinder_diameter_word_problem_converts_to_radius(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"cylinder_volume","data":{"diameter":14,"height":10}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {"question": "A cylinder has diameter 14 cm and height 10 cm. Find its volume."},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["operation"], "cylinder_volume")
+        self.assertAlmostEqual(response.json()["result"], 490 * math.pi)
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_cylinder_volume_missing_height_does_not_become_circle_area(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"circle_area","data":{"radius":4}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {"question": "A cylinder has radius 4 cm. Find its volume."},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_GEOMETRY_PARAMETERS")
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_unsupported_3d_solid_does_not_downgrade_to_2d_shape(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"circle_area","data":{"rho":4}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {"question": "A sphere has radius 4 cm. Find its volume."},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "UNSUPPORTED_GEOMETRY_OPERATION")
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_cone_height_and_volume_uses_semantic_plan_not_final_pythagoras(self, gemini_client):
+        gemini_client.return_value.generate.return_value = (
+            '{"operation":"pythagoras","data":{"a":5,"b":13}}'
+        )
+        with patch("euclidean.views.parser_service", None):
+            response = self.client.post(
+                "/api/solve/",
+                {"question": "A cone has radius 5 cm and slant height 13 cm. Find its height and volume."},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["operation"], "cone_solution")
+        self.assertEqual(body["result"]["height"], 12.0)
+        self.assertAlmostEqual(body["result"]["volume"], 100 * math.pi)
+        self.assertEqual(body["visualization"]["dimension"], "3d")
+        self.assertEqual(body["visualization"]["objects"][-1]["type"], "cone")
+
+    @patch("euclidean.parser.parser_service.GeminiClient")
+    def test_cone_paraphrases_normalize_to_same_semantic_spec(self, gemini_client):
+        examples = [
+            (
+                "Find the altitude and capacity of a cone whose radius is 5 cm and slant height is 13 cm.",
+                '{"operation":"cone_volume","data":{"radius":5,"slant_height":13}}',
+            ),
+            (
+                "Given r=5 cm and l=13 cm for a cone, determine h and V.",
+                '{"operation":"cone_volume","data":{"r":5,"l":13}}',
+            ),
+            (
+                "The sloping edge of a cone is 13 cm and its radius is 5 cm. What is its vertical height and volume?",
+                '{"operation":"pythagoras","data":{"a":5,"b":13}}',
+            ),
+        ]
+        for question, gemini_json in examples:
+            gemini_client.return_value.generate.return_value = gemini_json
+            with patch("euclidean.views.parser_service", None):
+                response = self.client.post("/api/solve/", {"question": question}, format="json")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["operation"], "cone_solution")
+            self.assertEqual(response.json()["result"]["height"], 12.0)
+            self.assertAlmostEqual(response.json()["result"]["volume"], 100 * math.pi)
 
     @patch("euclidean.parser.parser_service.GeminiClient")
     def test_triangle_area_word_problem_from_gemini_json(self, gemini_client):
@@ -677,6 +1000,20 @@ class ExplanationTests(SimpleTestCase):
     def test_rectangle_explanations(self):
         self.assert_student_explanation("rectangle_area", {"length": 8, "width": 5}, 40.0, "40")
         self.assert_student_explanation("rectangle_perimeter", {"length": 8, "width": 5}, 26.0, "26")
+
+    def test_3d_explanations(self):
+        points = [{"id": "A", "x": 1, "y": 2, "z": 3}, {"id": "B", "x": 5, "y": 5, "z": 6}]
+        self.assert_student_explanation("distance3d", {"points": points}, math.sqrt(34), r"\sqrt{34}")
+        self.assert_student_explanation(
+            "midpoint3d",
+            {"points": [{"id": "A", "x": 2, "y": 4, "z": 6}, {"id": "B", "x": 8, "y": 10, "z": 12}]},
+            {"type": "point3d", "x": 5, "y": 7, "z": 9},
+            "(5, 7, 9)",
+        )
+        self.assert_student_explanation("vector3d", {"points": points}, {"type": "vector3d", "from": [1, 2, 3], "to": [5, 5, 6]}, "(4, 3, 3)")
+        self.assert_student_explanation("cuboid_volume", {"width": 5, "height": 3, "depth": 4}, 60, "60 cubic units")
+        self.assert_student_explanation("cylinder_volume", {"radius": 4, "height": 10}, 160 * math.pi, r"160\pi")
+        self.assert_student_explanation("cylinder_total_surface_area", {"radius": 5, "height": 8}, 130 * math.pi, r"130\pi")
 
     def test_operation_labels_are_student_friendly(self):
         self.assertEqual(operation_label("triangle_third_angle"), "Triangle - Missing Angle")

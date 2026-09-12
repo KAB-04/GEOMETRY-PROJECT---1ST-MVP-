@@ -8,6 +8,7 @@ from rest_framework import status
 from .serializers import SolveSerializer
 
 from .solver.Solver import Solver
+from .solver.planner import SolutionPlanner
 from .solver.exceptions import (
     InvalidParametersError,
     OperationNotFoundError,
@@ -27,6 +28,7 @@ from .parser.exceptions import UnsupportedGeometryOperation
 from .parser.parser_service import ParserService
 
 solver = Solver()
+solution_planner = SolutionPlanner(solver)
 parser_service = None
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,40 @@ def solve_api(request):
             if parser_service is None:
                 parser_service = ParserService()
             parsed = parser_service.parse(question)
-            operation = parsed["operation"]
-            data = parsed["data"]
+            if parsed.get("semantic_problem"):
+                planned = solution_planner.solve(parsed["semantic_problem"])
+                logger.info(
+                    "Semantic plan geometry_type=%s dimension=%s requested=%s produced=%s request_satisfied=%s visualization=%s/%s",
+                    planned["semantic_problem"].get("geometry_type"),
+                    planned["semantic_problem"].get("dimension"),
+                    planned["semantic_problem"].get("requested"),
+                    list(planned["result"].keys()) if isinstance(planned["result"], dict) else [planned["operation"]],
+                    True,
+                    planned["semantic_problem"].get("geometry_type"),
+                    planned["semantic_problem"].get("dimension"),
+                )
+                operation = planned["operation"]
+                data = planned["data"]
+                result = planned["result"]
+            else:
+                operation = parsed["operation"]
+                data = parsed["data"]
+                result = solver.solve(operation, data)
         else:
-            operation = validated_data["operation"]
-            data = validated_data["data"]
+            operation = ParserService.OPERATION_ALIASES.get(
+                ParserService._normalize_operation_name(validated_data["operation"]),
+                ParserService._normalize_operation_name(validated_data["operation"]),
+            )
+            data = ParserService._normalize_data(operation, {"data": validated_data["data"]})
+            semantic_problem = ParserService._semantic_problem_from_interpretation(operation, data, "")
+            if semantic_problem:
+                planned = solution_planner.solve(semantic_problem)
+                operation = planned["operation"]
+                data = planned["data"]
+                result = planned["result"]
+            else:
+                result = solver.solve(operation, data)
 
-        result = solver.solve(operation, data)
         explanation = build_explanation(operation, data, result, question)
         return Response(
             {
@@ -115,6 +144,17 @@ def solve_api(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
     except ParserError as exc:
+        if question is None:
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "INVALID_GEOMETRY_PARAMETERS",
+                        "message": INVALID_GEOMETRY_PARAMETERS_MESSAGE,
+                    },
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(
             {"success": False, "error": {"code": "parser_error", "message": str(exc)}},
             status=status.HTTP_400_BAD_REQUEST,
@@ -138,7 +178,7 @@ def solve_api(request):
 
 
 def _visualization_for(operation, data, result=None, question=None):
-    if operation in {"distance3d", "midpoint3d", "vector3d", "triangle3d", "plane3d", "cuboid_volume"}:
+    if operation in {"distance3d", "midpoint3d", "vector3d", "line3d", "triangle3d", "plane3d", "cuboid_volume", "cylinder_volume", "cylinder_lateral_surface_area", "cylinder_total_surface_area", "cylinder_solution", "cone_solution", "cone_volume", "cone_lateral_surface_area", "cone_total_surface_area", "cone_height_from_radius_slant_height"}:
         return _visualization_3d_for(operation, data, result)
     if operation == "circle_circle_intersection" and isinstance(result, dict):
         final_points = result["final"].get("points", [])
@@ -267,24 +307,65 @@ def _visualization_3d_for(operation, data, result):
     points = data.get("points", [])
     objects.extend({"type": "point3d", **point, "label": point["id"]} for point in points)
     if operation == "distance3d":
-        objects.append({"type": "segment3d", "from": points[0]["id"], "to": points[1]["id"], "label": "AB"})
+        objects.append({"type": "segment3d", "from": points[0]["id"], "to": points[1]["id"], "label": _length_label(result)})
     elif operation == "midpoint3d":
         objects.append({"type": "point3d", "id": "M", **{axis: result[axis] for axis in ("x", "y", "z")}, "label": "M", "calculated": True})
         objects.append({"type": "segment3d", "from": points[0]["id"], "to": points[1]["id"], "label": "AB"})
-    elif operation == "vector3d":
+    elif operation == "vector3d" and isinstance(result, dict):
         objects.append({"type": "vector3d", "from": result["from"], "to": result["to"], "label": "v"})
-    elif operation == "triangle3d":
+    elif operation == "line3d" and isinstance(result, dict):
+        objects.append({"type": "line3d", "through": result["through"], "label": "line"})
+    elif operation == "triangle3d" and isinstance(result, dict):
         objects.append({"type": "triangle3d", "vertices": result["vertices"]})
-    elif operation == "plane3d":
-        objects.append({"type": "plane", "points": points})
+    elif operation == "plane3d" and isinstance(result, dict):
+        objects.append({"type": "plane", "points": points, "normal": result["normal"], "label": "plane"})
     elif operation == "cuboid_volume":
-        objects.append({"type": "cuboid", "origin": [0, 0, 0], "width": data["width"], "height": data["height"], "depth": data["depth"]})
+        objects.append({
+            "type": "cuboid",
+            "origin": [0, 0, 0],
+            "width": data["width"],
+            "height": data["height"],
+            "depth": data["depth"],
+            "labels": {
+                "width": f"w = {_format_number(data['width'])}",
+                "height": f"h = {_format_number(data['height'])}",
+                "depth": f"d = {_format_number(data['depth'])}",
+            },
+        })
+    elif operation in {"cylinder_volume", "cylinder_lateral_surface_area", "cylinder_total_surface_area"}:
+        objects.append({
+            "type": "cylinder",
+            "origin": [0, 0, 0],
+            "radius": data["radius"],
+            "height": data["height"],
+            "label": "Cylinder",
+            "labels": {
+                "radius": f"r = {_format_number(data['radius'])}",
+                "height": f"h = {_format_number(data['height'])}",
+            },
+        })
+    elif operation in {"cone_solution", "cone_volume", "cone_lateral_surface_area", "cone_total_surface_area", "cone_height_from_radius_slant_height"}:
+        objects.append({
+            "type": "cone",
+            "origin": [0, 0, 0],
+            "radius": data["radius"],
+            "height": data["height"],
+            "slantHeight": data.get("slant_height"),
+            "label": "Cone",
+            "labels": {
+                "radius": f"r = {_format_number(data['radius'])}",
+                "height": f"h = {_format_number(data['height'])}",
+                "slantHeight": f"l = {_format_number(data['slant_height'])}" if data.get("slant_height") is not None else None,
+            },
+        })
     return {"dimension": "3d", "coordinateSystem": True, "objects": objects}
 
 
 def _format_number(value):
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
     return str(value)
 
 
